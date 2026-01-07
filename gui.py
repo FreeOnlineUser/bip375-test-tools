@@ -26,12 +26,24 @@ except ImportError:
 try:
     from urtypes.crypto import PSBT as UR_PSBT
     from ur2.ur_encoder import UREncoder
+    from ur2.ur_decoder import URDecoder
     from ur2.ur import UR
     HAS_UR = True
 except ImportError:
     HAS_UR = False
     print("Warning: urtypes not installed. Animated QR codes will not be available.")
     print("Install with: pip install urtypes")
+
+# Camera scanning dependencies
+try:
+    import cv2
+    from pyzbar import pyzbar
+    from pyzbar.pyzbar import ZBarSymbol
+    HAS_CAMERA = True
+except ImportError:
+    HAS_CAMERA = False
+    print("Warning: opencv-python and/or pyzbar not installed. Camera scanning disabled.")
+    print("Install with: pip install opencv-python pyzbar")
 
 from generate_psbt import (
     generate_sp_address,
@@ -65,6 +77,9 @@ class BIP375TestToolGUI:
         self.ur_frames = []
         self.current_frame = 0
         self.animation_id = None
+
+        # Camera scanner state
+        self.camera_scanner = None
 
         self._create_widgets()
 
@@ -235,6 +250,15 @@ class BIP375TestToolGUI:
                                        padding=20, anchor="center", justify="center",
                                        width=30)
         self.psbt_qr_label.grid(row=0, column=0)
+
+        # Camera scan button
+        scan_btn = ttk.Button(right_frame, text="Use Camera to Verify Signed Transaction",
+                             command=self._scan_signed_psbt)
+        scan_btn.grid(row=7, column=0, pady=(5, 0))
+        if not HAS_CAMERA:
+            scan_btn.configure(state="disabled")
+            ttk.Label(right_frame, text="(pip install opencv-python pyzbar)",
+                     foreground="gray", font=("", 8)).grid(row=8, column=0)
 
         row += 1
 
@@ -615,6 +639,227 @@ class BIP375TestToolGUI:
             with open(filename, "w") as f:
                 f.write(psbt)
             self.status_var.set(f"PSBT saved to {filename}")
+
+    def _scan_signed_psbt(self):
+        """Open camera scanner to capture signed PSBT from SeedSigner."""
+        if not HAS_CAMERA:
+            messagebox.showwarning("Missing Dependencies",
+                "Camera scanning requires 'opencv-python' and 'pyzbar' packages.\n\n"
+                "Install with: pip install opencv-python pyzbar")
+            return
+
+        if not HAS_UR:
+            messagebox.showwarning("Missing Dependencies",
+                "UR decoding requires 'urtypes' package.\n\n"
+                "Install with: pip install urtypes")
+            return
+
+        # Prevent multiple camera windows
+        if self.camera_scanner is not None and self.camera_scanner.running:
+            messagebox.showinfo("Camera Active",
+                "A camera scanner is already open.")
+            return
+
+        # Cleanup callback when scanner closes (for any reason)
+        def on_scanner_close():
+            self.camera_scanner = None
+
+        self.camera_scanner = CameraScannerPopup(
+            self.root,
+            self._on_psbt_scanned,
+            on_close=on_scanner_close
+        )
+        self.camera_scanner.start()
+
+    def _on_psbt_scanned(self, signed_psbt_base64: str):
+        """Called when a signed PSBT is successfully scanned."""
+        try:
+            from embit import psbt as embit_psbt
+
+            # Parse the signed PSBT
+            psbt_bytes = base64.b64decode(signed_psbt_base64)
+            signed_psbt = embit_psbt.PSBT.parse(psbt_bytes)
+
+            # Check for signatures
+            has_signature = False
+            for inp in signed_psbt.inputs:
+                if inp.final_scriptwitness:
+                    has_signature = True
+                    break
+                # Check for Taproot signature
+                if hasattr(inp, 'taproot_sigs') and inp.taproot_sigs:
+                    has_signature = True
+                    break
+
+            if has_signature:
+                messagebox.showinfo("Signature Verified",
+                    "The signed PSBT contains a valid Taproot signature.\n\n"
+                    "The signing flow completed successfully!")
+                self.status_var.set("Signed PSBT verified - signature present")
+            else:
+                messagebox.showwarning("No Signature Found",
+                    "The PSBT was scanned but no signature was found.\n\n"
+                    "Make sure SeedSigner approved and signed the transaction.")
+                self.status_var.set("Scanned PSBT has no signature")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to verify signed PSBT:\n{e}")
+            self.status_var.set(f"Error verifying PSBT: {e}")
+
+
+class CameraScannerPopup:
+    """Popup window with webcam feed for scanning QR codes."""
+
+    def __init__(self, parent, callback, on_close=None):
+        self.parent = parent
+        self.callback = callback
+        self.on_close = on_close  # Called when scanner closes (for cleanup)
+        self.popup = None
+        self.video_label = None
+        self.status_label = None
+        self.progress_label = None
+        self.cap = None
+        self.running = False
+        self.ur_decoder = None
+        self.scan_after_id = None
+
+    def start(self):
+        """Open the scanner popup and start camera."""
+        self.popup = tk.Toplevel(self.parent)
+        self.popup.title("Scan Signed PSBT from SeedSigner")
+        self.popup.geometry("500x480")
+        self.popup.resizable(False, False)
+        self.popup.protocol("WM_DELETE_WINDOW", self.stop)
+
+        # Instructions
+        ttk.Label(self.popup, text="Point camera at SeedSigner's animated QR code",
+                 font=("", 10, "bold")).pack(pady=(10, 5))
+
+        # Video frame
+        video_frame = ttk.Frame(self.popup, relief="sunken", borderwidth=2)
+        video_frame.pack(pady=5)
+
+        self.video_label = ttk.Label(video_frame, text="Starting camera...",
+                                     width=50, anchor="center")
+        self.video_label.pack()
+
+        # Progress
+        self.progress_label = ttk.Label(self.popup, text="Waiting for QR code...",
+                                        foreground="gray")
+        self.progress_label.pack(pady=5)
+
+        # Status
+        self.status_label = ttk.Label(self.popup, text="", foreground="blue")
+        self.status_label.pack(pady=5)
+
+        # Cancel button
+        ttk.Button(self.popup, text="Cancel", command=self.stop, width=10).pack(pady=10)
+
+        # Initialize UR decoder
+        self.ur_decoder = URDecoder()
+
+        # Start camera
+        self.cap = cv2.VideoCapture(0)
+        if not self.cap.isOpened():
+            messagebox.showerror("Camera Error", "Could not open webcam")
+            self.popup.destroy()
+            return
+
+        self.running = True
+        self._scan_frame()
+
+    def _scan_frame(self):
+        """Capture and process a single frame."""
+        if not self.running or not self.cap or not self.popup:
+            return
+
+        ret, frame = self.cap.read()
+        if ret:
+            # Decode QR codes from frame
+            decoded_objects = pyzbar.decode(frame, symbols=[ZBarSymbol.QRCODE])
+
+            for obj in decoded_objects:
+                qr_data = obj.data.decode('utf-8')
+
+                # Draw rectangle around detected QR
+                x, y, w, h = obj.rect
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+                # Process UR fragment
+                if qr_data.upper().startswith("UR:"):
+                    self._process_ur_fragment(qr_data)
+                    # Check if we're done (popup closed)
+                    if not self.running:
+                        return
+
+            # Only update UI if still running
+            if self.running and self.popup:
+                # Convert frame to display in tkinter
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frame_resized = cv2.resize(frame_rgb, (400, 300))
+                img = Image.fromarray(frame_resized)
+                photo = ImageTk.PhotoImage(img)
+
+                self.video_label.configure(image=photo, text="")
+                self.video_label.image = photo
+
+        # Schedule next frame
+        if self.running and self.popup:
+            self.scan_after_id = self.popup.after(30, self._scan_frame)
+
+    def _process_ur_fragment(self, qr_data: str):
+        """Process a UR fragment and check if complete."""
+        try:
+            added = self.ur_decoder.receive_part(qr_data)
+
+            if added:
+                # Update progress
+                percent = int(self.ur_decoder.estimated_percent_complete() * 100)
+                self.progress_label.configure(text=f"Scanning: {percent}% complete")
+
+            if self.ur_decoder.is_success():
+                # Complete! Extract PSBT
+                self.status_label.configure(text="QR complete! Processing...", foreground="green")
+                self.popup.update()
+
+                # Get the CBOR data and extract PSBT bytes
+                ur_result = self.ur_decoder.result
+                psbt_bytes = UR_PSBT.from_cbor(ur_result.cbor).data
+
+                # Convert to base64
+                psbt_base64 = base64.b64encode(psbt_bytes).decode('utf-8')
+
+                # Stop scanning and call callback
+                self.stop()
+                self.callback(psbt_base64)
+
+            elif self.ur_decoder.is_failure():
+                self.status_label.configure(text="UR decoding failed", foreground="red")
+                # Reset decoder to try again
+                self.ur_decoder = URDecoder()
+
+        except Exception as e:
+            self.status_label.configure(text=f"Error: {e}", foreground="red")
+
+    def stop(self):
+        """Stop scanning and close popup."""
+        self.running = False
+
+        if self.scan_after_id and self.popup:
+            self.popup.after_cancel(self.scan_after_id)
+            self.scan_after_id = None
+
+        if self.cap:
+            self.cap.release()
+            self.cap = None
+
+        if self.popup:
+            self.popup.destroy()
+            self.popup = None
+
+        # Notify parent that scanner closed
+        if self.on_close:
+            self.on_close()
 
 
 def main():

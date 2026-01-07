@@ -2,3 +2,7 @@ embit>=0.7.0
 qrcode[pil]>=7.0
 Pillow>=9.0
 urtypes>=1.0.0
+
+# Optional: Camera scanning for signed PSBT verification
+opencv-python>=4.5.0
+pyzbar>=0.1.9

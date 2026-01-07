@@ -108,7 +108,7 @@ In a real Silent Payment workflow, your coordinator wallet (Sparrow, BlueWallet,
 1. Take the recipient's `sp1...` address
 2. Select UTXOs to spend from your wallet
 3. Derive the unique output address using BIP-352
-4. Build a PSBT with BIP-375 fields so your signing device can verify the derivation
+4. Build a PSBT with BIP-375 fields (including DLEQ proof) so your signing device can verify the output was derived correctly before signing
 5. Send the PSBT to your hardware signer for approval
 
 **This tool simulates step 4** - it generates the same BIP-375 PSBT that a coordinator wallet would create, allowing you to test hardware signer verification without needing a full wallet setup or real UTXOs.

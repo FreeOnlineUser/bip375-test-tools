@@ -200,8 +200,8 @@ class BIP375TestToolGUI:
 
         # Explainer for PSBT generation
         psbt_explainer = (
-            "In production, your wallet (Sparrow, BlueWallet) generates this BIP-375 PSBT "
-            "so signing devices can verify the Silent Payment output."
+            "In production, your wallet builds this BIP-375 PSBT with proof data (DLEQ) "
+            "so signing devices can verify the output was derived correctly before signing."
         )
         ttk.Label(right_frame, text=psbt_explainer, foreground="gray", font=("", 8),
                  wraplength=400, justify="left").grid(row=3, column=0, sticky="w", pady=(0, 5))

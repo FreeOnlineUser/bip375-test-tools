@@ -1,3 +1,4 @@
 embit>=0.7.0
 qrcode[pil]>=7.0
 Pillow>=9.0
+urtypes>=1.0.0

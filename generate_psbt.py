@@ -19,7 +19,7 @@ from binascii import hexlify, unhexlify
 from typing import Tuple, List, Optional
 
 from embit import bip32, bip39, ec, script
-from embit.psbt import PSBT, InputScope, OutputScope
+from embit.psbt import PSBT, InputScope, OutputScope, DerivationPath
 from embit.transaction import Transaction, TransactionInput, TransactionOutput
 from embit.networks import NETWORKS
 from embit.util import secp256k1
@@ -512,15 +512,49 @@ def create_bip375_psbt(
     # Add input info
     inp = psbt.inputs[0]
 
-    # Create witness UTXO (Taproot input)
-    input_script = script.Script(b'\x51\x20' + public_key.xonly())
+    # For Taproot key-path spend, the output script contains the TWEAKED pubkey
+    # The tweak is: t = tagged_hash("TapTweak", internal_key || merkle_root)
+    # For key-path only (no scripts), merkle_root is empty, so: t = tagged_hash("TapTweak", internal_key)
+    # Output key = internal_key + t*G
+    internal_xonly = public_key.xonly()
+
+    # Compute taproot tweak
+    tap_tweak = tagged_hash("TapTweak", internal_xonly)
+
+    # Tweaked public key = P + t*G
+    # We need to add t*G to the internal key point
+    internal_point = secp256k1.ec_pubkey_parse(public_key.serialize())
+    secp256k1.ec_pubkey_tweak_add(internal_point, tap_tweak)
+    tweaked_pubkey = secp256k1.ec_pubkey_serialize(internal_point, secp256k1.EC_COMPRESSED)
+    tweaked_xonly = tweaked_pubkey[1:33]  # x-coordinate only
+
+    # Create witness UTXO with the TWEAKED pubkey (what actually appears on-chain)
+    input_script = script.Script(b'\x51\x20' + tweaked_xonly)
     inp.witness_utxo = TransactionOutput(
         value=input_amount_sats,
         script_pubkey=input_script
     )
 
-    # Add BIP32 derivation info (simplified - not required for SP verification)
-    # Skip taproot_bip32_derivations as it requires DerivationPath which varies by embit version
+    # Add Taproot BIP32 derivation info so SeedSigner can sign
+    # Get the master fingerprint from the root key
+    fingerprint = root.my_fingerprint
+
+    # Parse the derivation path to list of integers
+    if network == "testnet":
+        path_list = bip32.parse_path("m/86'/1'/0'/0/0")
+    else:
+        path_list = bip32.parse_path("m/86'/0'/0'/0/0")
+
+    # Create DerivationPath object
+    deriv_path = DerivationPath(fingerprint, path_list)
+
+    # Add to taproot_bip32_derivations
+    # Key is the public key, value is (leaf_hashes, derivation)
+    # Empty leaf_hashes for key-path spend
+    inp.taproot_bip32_derivations[public_key] = ([], deriv_path)
+
+    # Also set the taproot internal key (x-only pubkey)
+    inp.taproot_internal_key = public_key
 
     # Generate DLEQ proof
     C, dleq_proof = generate_dleq_proof(a, A, B_scan)

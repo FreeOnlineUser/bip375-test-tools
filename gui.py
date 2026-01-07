@@ -23,6 +23,16 @@ except ImportError:
     print("Warning: qrcode and/or Pillow not installed. QR codes will not be displayed.")
     print("Install with: pip install qrcode[pil]")
 
+try:
+    from urtypes.crypto import PSBT as UR_PSBT
+    from ur2.ur_encoder import UREncoder
+    from ur2.ur import UR
+    HAS_UR = True
+except ImportError:
+    HAS_UR = False
+    print("Warning: urtypes not installed. Animated QR codes will not be available.")
+    print("Install with: pip install urtypes")
+
 from generate_psbt import (
     generate_sp_address,
     create_bip375_psbt,
@@ -30,23 +40,31 @@ from generate_psbt import (
     DEFAULT_MNEMONIC,
 )
 
+# Different test mnemonic for sender (visually distinct)
+SENDER_MNEMONIC = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong"
+
 
 class BIP375TestToolGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("BIP-375 Silent Payment Test Tool")
-        self.root.geometry("1000x750")
+        self.root.geometry("1000x800")
 
         # Variables
-        self.mnemonic_var = tk.StringVar(value=DEFAULT_MNEMONIC)
         self.network_var = tk.StringVar(value="mainnet")
         self.sp_address_var = tk.StringVar()
         self.amount_var = tk.StringVar(value="100000")
         self.psbt_var = tk.StringVar()
+        self.qr_mode_var = tk.StringVar(value="animated" if HAS_UR else "static")
 
         # QR labels
         self.sp_qr_label = None
         self.psbt_qr_label = None
+
+        # Animation state
+        self.ur_frames = []
+        self.current_frame = 0
+        self.animation_id = None
 
         self._create_widgets()
 
@@ -61,25 +79,6 @@ class BIP375TestToolGUI:
 
         row = 0
 
-        # === Mnemonic Section ===
-        ttk.Label(main_frame, text="Mnemonic:", font=("", 10, "bold")).grid(
-            row=row, column=0, sticky="w", pady=(0, 5)
-        )
-        row += 1
-
-        mnemonic_frame = ttk.Frame(main_frame)
-        mnemonic_frame.grid(row=row, column=0, sticky="ew", pady=(0, 5))
-        mnemonic_frame.columnconfigure(0, weight=1)
-
-        self.mnemonic_entry = ttk.Entry(mnemonic_frame, textvariable=self.mnemonic_var, width=100)
-        self.mnemonic_entry.grid(row=0, column=0, sticky="ew")
-
-        ttk.Button(mnemonic_frame, text="Default", command=self._reset_mnemonic, width=8).grid(
-            row=0, column=1, padx=(5, 0)
-        )
-
-        row += 1
-
         # === Network Selection ===
         network_frame = ttk.Frame(main_frame)
         network_frame.grid(row=row, column=0, sticky="w", pady=5)
@@ -93,29 +92,41 @@ class BIP375TestToolGUI:
         row += 1
 
         # === Two-column layout for SP Address and PSBT ===
-        ttk.Separator(main_frame, orient="horizontal").grid(
-            row=row, column=0, sticky="ew", pady=10
-        )
-        row += 1
-
         columns_frame = ttk.Frame(main_frame)
         columns_frame.grid(row=row, column=0, sticky="nsew", pady=5)
         columns_frame.columnconfigure(0, weight=1)
         columns_frame.columnconfigure(1, weight=1)
 
-        # === LEFT COLUMN: SP Address ===
-        left_frame = ttk.LabelFrame(columns_frame, text="Step 1: SP Address", padding=10)
+        # === LEFT COLUMN: SP Address (Recipient) ===
+        left_frame = ttk.LabelFrame(columns_frame, text="Step 1: Recipient SP Address", padding=10)
         left_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
         left_frame.columnconfigure(0, weight=1)
 
+        # Recipient mnemonic (for SP address generation) - 2 lines
+        ttk.Label(left_frame, text="Recipient mnemonic:", font=("", 9)).grid(
+            row=0, column=0, sticky="w", pady=(0, 2)
+        )
+
+        recipient_frame = ttk.Frame(left_frame)
+        recipient_frame.grid(row=1, column=0, sticky="ew", pady=(0, 5))
+        recipient_frame.columnconfigure(0, weight=1)
+
+        self.recipient_text = tk.Text(recipient_frame, height=2, width=40, wrap="word")
+        self.recipient_text.grid(row=0, column=0, sticky="ew")
+        self.recipient_text.insert("1.0", DEFAULT_MNEMONIC)
+
+        recipient_btn_frame = ttk.Frame(recipient_frame)
+        recipient_btn_frame.grid(row=0, column=1, sticky="n", padx=(5, 0))
+        ttk.Button(recipient_btn_frame, text="Default", command=self._reset_recipient_mnemonic, width=8).grid(row=0, column=0)
+
         ttk.Button(left_frame, text="Generate SP Address",
                   command=self._generate_sp_address, width=25).grid(
-            row=0, column=0, pady=(0, 10)
+            row=2, column=0, pady=(5, 10)
         )
 
         # SP Address entry
         sp_entry_frame = ttk.Frame(left_frame)
-        sp_entry_frame.grid(row=1, column=0, sticky="ew", pady=(0, 5))
+        sp_entry_frame.grid(row=3, column=0, sticky="ew", pady=(0, 5))
         sp_entry_frame.columnconfigure(0, weight=1)
 
         self.sp_entry = ttk.Entry(sp_entry_frame, textvariable=self.sp_address_var, width=50)
@@ -125,9 +136,13 @@ class BIP375TestToolGUI:
             row=0, column=1, padx=(5, 0)
         )
 
+        # Note about SP address
+        ttk.Label(left_frame, text="(You can also paste any sp1.../tsp1... address here)",
+                 foreground="gray", font=("", 8)).grid(row=4, column=0, sticky="w", pady=(0, 5))
+
         # SP Address QR code
         sp_qr_frame = ttk.Frame(left_frame, relief="sunken", borderwidth=2)
-        sp_qr_frame.grid(row=2, column=0, sticky="n", pady=5)
+        sp_qr_frame.grid(row=5, column=0, sticky="n", pady=5)
 
         self.sp_qr_label = ttk.Label(sp_qr_frame, text="SP Address QR\nwill appear here",
                                      padding=20, anchor="center", justify="center",
@@ -139,9 +154,27 @@ class BIP375TestToolGUI:
         right_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
         right_frame.columnconfigure(0, weight=1)
 
-        # Amount input
+        # Sender mnemonic (for signing) - 2 lines
+        ttk.Label(right_frame, text="Sender seed (load into SeedSigner):", font=("", 9)).grid(
+            row=0, column=0, sticky="w", pady=(0, 2)
+        )
+
+        sender_frame = ttk.Frame(right_frame)
+        sender_frame.grid(row=1, column=0, sticky="ew", pady=(0, 5))
+        sender_frame.columnconfigure(0, weight=1)
+
+        self.sender_text = tk.Text(sender_frame, height=2, width=40, wrap="word")
+        self.sender_text.grid(row=0, column=0, sticky="ew")
+        self.sender_text.insert("1.0", SENDER_MNEMONIC)
+
+        sender_btn_frame = ttk.Frame(sender_frame)
+        sender_btn_frame.grid(row=0, column=1, sticky="n", padx=(5, 0))
+        ttk.Button(sender_btn_frame, text="Default", command=self._reset_sender_mnemonic, width=8).grid(row=0, column=0)
+        ttk.Button(sender_btn_frame, text="Seed QR", command=self._show_seed_qr, width=8).grid(row=1, column=0, pady=(2, 0))
+
+        # Amount input and generate button
         amount_frame = ttk.Frame(right_frame)
-        amount_frame.grid(row=0, column=0, sticky="w", pady=(0, 10))
+        amount_frame.grid(row=2, column=0, sticky="w", pady=(5, 5))
 
         ttk.Label(amount_frame, text="Amount:").grid(row=0, column=0)
         ttk.Entry(amount_frame, textvariable=self.amount_var, width=12).grid(row=0, column=1, padx=(5, 0))
@@ -150,9 +183,39 @@ class BIP375TestToolGUI:
         ttk.Button(amount_frame, text="Generate PSBT",
                   command=self._generate_psbt, width=15).grid(row=0, column=3, padx=(15, 0))
 
+        # QR Mode toggle
+        qr_mode_frame = ttk.Frame(right_frame)
+        qr_mode_frame.grid(row=3, column=0, sticky="w", pady=(0, 5))
+
+        ttk.Label(qr_mode_frame, text="QR Mode:").grid(row=0, column=0, padx=(0, 5))
+        anim_rb = ttk.Radiobutton(qr_mode_frame, text="Animated (UR)",
+                       variable=self.qr_mode_var, value="animated",
+                       command=self._on_qr_mode_change)
+        anim_rb.grid(row=0, column=1)
+        if not HAS_UR:
+            anim_rb.configure(state="disabled")
+
+        ttk.Radiobutton(qr_mode_frame, text="Static",
+                       variable=self.qr_mode_var, value="static",
+                       command=self._on_qr_mode_change).grid(row=0, column=2, padx=(10, 0))
+
+        if not HAS_UR:
+            ttk.Label(qr_mode_frame, text="(pip install urtypes)", foreground="gray").grid(row=0, column=3, padx=(5, 0))
+
+        # Derived output address (bc1p...)
+        output_addr_frame = ttk.Frame(right_frame)
+        output_addr_frame.grid(row=4, column=0, sticky="ew", pady=(0, 5))
+        output_addr_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(output_addr_frame, text="Output:", font=("", 9, "bold")).grid(row=0, column=0, padx=(0, 5))
+        self.output_addr_var = tk.StringVar(value="(generate PSBT to see derived address)")
+        self.output_addr_entry = ttk.Entry(output_addr_frame, textvariable=self.output_addr_var, width=45, state="readonly")
+        self.output_addr_entry.grid(row=0, column=1, sticky="ew")
+        ttk.Button(output_addr_frame, text="Copy", command=self._copy_output_addr, width=6).grid(row=0, column=2, padx=(5, 0))
+
         # PSBT text area
         psbt_text_frame = ttk.Frame(right_frame)
-        psbt_text_frame.grid(row=1, column=0, sticky="ew", pady=(0, 5))
+        psbt_text_frame.grid(row=5, column=0, sticky="ew", pady=(0, 5))
         psbt_text_frame.columnconfigure(0, weight=1)
 
         self.psbt_text = tk.Text(psbt_text_frame, height=3, width=50, wrap="char")
@@ -166,7 +229,7 @@ class BIP375TestToolGUI:
 
         # PSBT QR code
         psbt_qr_frame = ttk.Frame(right_frame, relief="sunken", borderwidth=2)
-        psbt_qr_frame.grid(row=2, column=0, sticky="n", pady=5)
+        psbt_qr_frame.grid(row=6, column=0, sticky="n", pady=5)
 
         self.psbt_qr_label = ttk.Label(psbt_qr_frame, text="PSBT QR\nwill appear here",
                                        padding=20, anchor="center", justify="center",
@@ -203,13 +266,106 @@ class BIP375TestToolGUI:
         status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief="sunken", anchor="w")
         status_bar.grid(row=row, column=0, sticky="ew", pady=(5, 0))
 
-    def _reset_mnemonic(self):
-        self.mnemonic_var.set(DEFAULT_MNEMONIC)
-        self.status_var.set("Mnemonic reset to default test mnemonic")
+    def _reset_sender_mnemonic(self):
+        self.sender_text.delete("1.0", tk.END)
+        self.sender_text.insert("1.0", SENDER_MNEMONIC)
+        self.status_var.set("Sender mnemonic reset to default test mnemonic")
+
+    def _reset_recipient_mnemonic(self):
+        self.recipient_text.delete("1.0", tk.END)
+        self.recipient_text.insert("1.0", DEFAULT_MNEMONIC)
+        self.status_var.set("Recipient mnemonic reset to default test mnemonic")
+
+    def _show_seed_qr(self):
+        """Show a popup window with the sender mnemonic as a SeedQR (compact format)."""
+        if not HAS_QR:
+            messagebox.showwarning("Missing Dependencies",
+                "QR code display requires 'qrcode' and 'Pillow' packages.\n\n"
+                "Install with: pip install qrcode[pil]")
+            return
+
+        mnemonic = self.sender_text.get("1.0", tk.END).strip()
+        if not mnemonic:
+            messagebox.showwarning("Warning", "No mnemonic entered")
+            return
+
+        # Convert mnemonic to SeedQR format (compact numeric)
+        # SeedQR encodes each word as its BIP-39 wordlist index (4 digits each)
+        try:
+            from embit import bip39
+            wordlist = bip39.WORDLIST
+
+            words = mnemonic.split()
+            if len(words) not in (12, 24):
+                messagebox.showerror("Error", "Mnemonic must be 12 or 24 words")
+                return
+
+            # Build numeric string: each word -> 4-digit index
+            seed_qr_data = ""
+            for word in words:
+                if word not in wordlist:
+                    messagebox.showerror("Error", f"Invalid BIP-39 word: {word}")
+                    return
+                index = wordlist.index(word)
+                seed_qr_data += f"{index:04d}"
+
+            # Create popup window
+            popup = tk.Toplevel(self.root)
+            popup.title("Seed QR - Scan with SeedSigner")
+            popup.geometry("350x420")
+            popup.resizable(False, False)
+
+            # Warning label
+            warn_label = ttk.Label(popup, text="FOR TESTING ONLY - Do not use with real funds!",
+                                   foreground="red", font=("", 9, "bold"))
+            warn_label.pack(pady=(10, 5))
+
+            # Generate QR
+            qr = qrcode.QRCode(
+                version=None,
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=6,
+                border=2,
+            )
+            qr.add_data(seed_qr_data)
+            qr.make(fit=True)
+
+            img = qr.make_image(fill_color="black", back_color="white")
+
+            img_bytes = io.BytesIO()
+            img.save(img_bytes, format="PNG")
+            img_bytes.seek(0)
+
+            pil_img = Image.open(img_bytes)
+            photo = ImageTk.PhotoImage(pil_img)
+
+            # QR label
+            qr_label = ttk.Label(popup, image=photo)
+            qr_label.image = photo  # Keep reference
+            qr_label.pack(pady=10)
+
+            # Info label
+            info_label = ttk.Label(popup, text=f"SeedQR format ({len(words)} words)\nScan with SeedSigner: Scan > Scan a SeedQR",
+                                   justify="center", foreground="gray")
+            info_label.pack(pady=(0, 10))
+
+            # Close button
+            ttk.Button(popup, text="Close", command=popup.destroy, width=10).pack(pady=(0, 10))
+
+            self.status_var.set(f"Showing SeedQR for {len(words)}-word mnemonic")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to generate SeedQR:\n{e}")
+
+    def _on_qr_mode_change(self):
+        """Handle QR mode toggle - refresh PSBT QR if we have one."""
+        psbt = self.psbt_text.get("1.0", tk.END).strip()
+        if psbt:
+            self._show_psbt_qr()
 
     def _generate_sp_address(self):
         try:
-            mnemonic = self.mnemonic_var.get().strip()
+            mnemonic = self.recipient_text.get("1.0", tk.END).strip()
             network = self.network_var.get()
 
             sp_addr, B_scan, B_spend = generate_sp_address(mnemonic, network)
@@ -224,22 +380,35 @@ class BIP375TestToolGUI:
 
     def _generate_psbt(self):
         try:
+            # Stop any existing animation
+            self._stop_animation()
+
             sp_addr = self.sp_address_var.get().strip()
             if not sp_addr:
                 messagebox.showwarning("Warning", "Please generate or enter an SP address first")
                 return
 
-            mnemonic = self.mnemonic_var.get().strip()
+            sender_mnemonic = self.sender_text.get("1.0", tk.END).strip()
             amount = int(self.amount_var.get())
 
             psbt_base64, psbt, output_xonly = create_bip375_psbt(
                 sp_address=sp_addr,
                 amount_sats=amount,
-                mnemonic=mnemonic
+                mnemonic=sender_mnemonic
             )
 
             self.psbt_text.delete("1.0", tk.END)
             self.psbt_text.insert("1.0", psbt_base64)
+
+            # Convert x-only pubkey to bc1p... Taproot address
+            # Determine network from SP address prefix
+            if sp_addr.startswith("tsp1"):
+                hrp = "tb"  # testnet
+            else:
+                hrp = "bc"  # mainnet
+
+            output_addr = self._xonly_to_bech32m(output_xonly, hrp)
+            self.output_addr_var.set(output_addr)
 
             self.status_var.set(f"Generated BIP-375 PSBT: {len(psbt_base64)} chars")
             self._show_psbt_qr()  # Auto-show QR
@@ -247,6 +416,21 @@ class BIP375TestToolGUI:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to generate PSBT:\n{e}")
             self.status_var.set(f"Error: {e}")
+
+    def _xonly_to_bech32m(self, xonly_pubkey: bytes, hrp: str = "bc") -> str:
+        """Convert x-only pubkey to bech32m Taproot address."""
+        from generate_psbt import bech32m_encode
+        # Taproot witness version is 1, followed by 32-byte x-only pubkey
+        data = bytes([1]) + xonly_pubkey
+        return bech32m_encode(hrp, data)
+
+    def _copy_output_addr(self):
+        """Copy the derived output address to clipboard."""
+        addr = self.output_addr_var.get()
+        if addr and not addr.startswith("("):
+            self.root.clipboard_clear()
+            self.root.clipboard_append(addr)
+            self.status_var.set("Output address copied to clipboard")
 
     def _generate_qr_image(self, data: str, size: int = 200):
         """Generate a QR code image."""
@@ -282,6 +466,68 @@ class BIP375TestToolGUI:
             print(f"QR generation error: {e}")
             return None
 
+    def _generate_ur_frames(self, psbt_base64: str, max_fragment_len: int = 100) -> list:
+        """Generate UR animated QR frames for a PSBT."""
+        if not HAS_UR:
+            return []
+
+        try:
+            # Decode base64 PSBT to bytes
+            psbt_bytes = base64.b64decode(psbt_base64)
+
+            # Create UR for crypto-psbt using urtypes
+            ur_psbt = UR_PSBT(psbt_bytes)
+            cbor_data = ur_psbt.to_cbor()
+
+            # Create UR with type and CBOR data
+            ur = UR(ur_psbt.registry_type().type, cbor_data)
+
+            # Create encoder with fragment size
+            encoder = UREncoder(ur, max_fragment_len=max_fragment_len)
+
+            # Generate all frames
+            frames = []
+            # Get enough frames for smooth animation
+            seq_len = encoder.fountain_encoder.seq_len()
+            # Generate 2x the minimum frames for better scanning
+            for _ in range(max(seq_len * 2, 10)):
+                frame = encoder.next_part().upper()
+                frames.append(frame)
+
+            return frames
+
+        except Exception as e:
+            print(f"UR encoding error: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    def _stop_animation(self):
+        """Stop any running animation."""
+        if self.animation_id:
+            self.root.after_cancel(self.animation_id)
+            self.animation_id = None
+        self.ur_frames = []
+        self.current_frame = 0
+
+    def _animate_qr(self):
+        """Display next frame in UR animation."""
+        if not self.ur_frames:
+            return
+
+        frame_data = self.ur_frames[self.current_frame]
+        photo = self._generate_qr_image(frame_data, size=280)
+
+        if photo:
+            self.psbt_qr_label.configure(image=photo, text="")
+            self.psbt_qr_label.image = photo
+
+        # Move to next frame
+        self.current_frame = (self.current_frame + 1) % len(self.ur_frames)
+
+        # Schedule next frame (200ms = 5 fps, good for scanning)
+        self.animation_id = self.root.after(200, self._animate_qr)
+
     def _show_sp_qr(self):
         if not HAS_QR:
             messagebox.showwarning("Missing Dependencies",
@@ -305,14 +551,39 @@ class BIP375TestToolGUI:
                 "Install with: pip install qrcode[pil]")
             return
 
+        # Stop any existing animation
+        self._stop_animation()
+
         psbt = self.psbt_text.get("1.0", tk.END).strip()
-        if psbt:
-            photo = self._generate_qr_image(psbt, size=250)
-            if photo:
-                self.psbt_qr_label.configure(image=photo, text="")
-                self.psbt_qr_label.image = photo  # Keep reference
-        else:
+        if not psbt:
             self.psbt_qr_label.configure(image="", text="PSBT QR\nwill appear here")
+            return
+
+        qr_mode = self.qr_mode_var.get()
+
+        if qr_mode == "animated" and HAS_UR:
+            # Generate UR frames and start animation
+            self.ur_frames = self._generate_ur_frames(psbt)
+            if self.ur_frames:
+                self.current_frame = 0
+                self._animate_qr()
+                self.status_var.set(f"Animated UR QR: {len(self.ur_frames)} frames @ 5fps")
+            else:
+                # Fallback to static if UR encoding fails
+                self._show_static_psbt_qr(psbt)
+        else:
+            self._show_static_psbt_qr(psbt)
+
+    def _show_static_psbt_qr(self, psbt: str):
+        """Show static QR code for PSBT."""
+        photo = self._generate_qr_image(psbt, size=280)
+        if photo:
+            self.psbt_qr_label.configure(image=photo, text="")
+            self.psbt_qr_label.image = photo
+            self.status_var.set(f"Static QR: {len(psbt)} chars (may be hard to scan)")
+        else:
+            self.psbt_qr_label.configure(image="", text="QR too large\nUse animated mode")
+            self.status_var.set("Static QR failed - PSBT too large, try animated mode")
 
     def _copy_sp_address(self):
         sp_addr = self.sp_address_var.get()

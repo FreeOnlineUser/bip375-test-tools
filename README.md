@@ -19,6 +19,28 @@ pip install -r requirements.txt
 
 ## Usage
 
+### GUI (Recommended for SeedSigner Testing)
+
+```bash
+python gui.py
+```
+
+The GUI provides:
+
+- Generate SP addresses from any mnemonic (mainnet or testnet)
+- Generate BIP-375 PSBTs with all required fields
+- Display QR codes for SeedSigner to scan
+- Copy/save functionality
+
+**Workflow:**
+
+1. Enter a mnemonic or use the default test mnemonic
+2. Click "Generate SP Address" - QR code appears
+3. Scan the SP address QR with SeedSigner (optional pre-verification)
+4. Set amount and click "Generate BIP-375 PSBT"
+5. Scan the PSBT QR with SeedSigner
+6. SeedSigner should show the SP address with BIP-375 verification
+
 ### Command Line
 
 ```bash

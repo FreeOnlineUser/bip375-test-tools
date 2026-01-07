@@ -171,8 +171,59 @@ def bech32m_encode(hrp: str, data: bytes) -> str:
 
 
 # ============================================================================
-# Silent Payment Address Parsing
+# Silent Payment Address Generation & Parsing
 # ============================================================================
+
+def generate_sp_address(mnemonic: str = DEFAULT_MNEMONIC, network: str = "mainnet") -> Tuple[str, bytes, bytes]:
+    """
+    Generate a Silent Payment address from a mnemonic.
+
+    Per BIP-352, SP addresses use:
+    - B_scan = b_scan * G (scan private key derived at m/352'/0'/0'/1'/0)
+    - B_spend = b_spend * G (spend private key derived at m/352'/0'/0'/0'/0)
+
+    Args:
+        mnemonic: BIP-39 mnemonic
+        network: "mainnet" or "testnet"
+
+    Returns:
+        (sp_address, B_scan, B_spend)
+    """
+    from embit import bip39
+
+    # Network settings
+    if network == "testnet":
+        embit_network = "test"
+        hrp = "tsp"
+        coin_type = "1'"
+    else:
+        embit_network = "main"
+        hrp = "sp"
+        coin_type = "0'"
+
+    # Generate keys from mnemonic
+    seed_bytes = bip39.mnemonic_to_seed(mnemonic)
+    root = bip32.HDKey.from_seed(seed_bytes, version=NETWORKS[embit_network]["xprv"])
+
+    # BIP-352 derivation paths
+    # m/352'/coin'/account'/0'/0 for spend key
+    # m/352'/coin'/account'/1'/0 for scan key
+    spend_path = f"m/352'/{coin_type}/0'/0'/0"
+    scan_path = f"m/352'/{coin_type}/0'/1'/0"
+
+    spend_key = root.derive(spend_path).key
+    scan_key = root.derive(scan_path).key
+
+    B_spend = spend_key.get_public_key().serialize()
+    B_scan = scan_key.get_public_key().serialize()
+
+    # Encode as SP address
+    # Format: version (0) + B_scan (33 bytes) + B_spend (33 bytes)
+    payload = bytes([0]) + B_scan + B_spend
+    sp_address = bech32m_encode(hrp, payload)
+
+    return sp_address, B_scan, B_spend
+
 
 def parse_silent_payment_address(address: str) -> Tuple[bytes, bytes, str]:
     """

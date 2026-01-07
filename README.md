@@ -2,6 +2,10 @@
 
 Generate valid BIP-375 PSBTs for testing Silent Payment (BIP-352) verification in hardware wallets and coordinators.
 
+> **FOR TESTING ONLY**
+>
+> These PSBTs reference **non-existent inputs** (randomly generated txids). They are designed purely for testing BIP-375 verification logic in hardware wallets. The Bitcoin network will reject any attempt to broadcast them since the inputs don't exist.
+
 ## What is BIP-375?
 
 [BIP-375](https://github.com/bitcoin/bips/blob/master/bip-0375.mediawiki) defines how to embed Silent Payment information into PSBTs, allowing hardware signers to verify that outputs are correctly derived for a given Silent Payment address.
@@ -89,6 +93,27 @@ print(f"Derived output: {output_xonly.hex()}")
 3. **Computes SP output** - Derives the expected Taproot output per BIP-352
 4. **Generates DLEQ proof** - Creates BIP-374 proof that ECDH was computed correctly
 5. **Builds PSBT** - Creates transaction with all BIP-375 fields populated
+
+## Why is the SP Address Always the Same?
+
+The SP address is derived deterministically from the mnemonic at fixed BIP-352 paths:
+
+- `m/352'/0'/0'/0'/0` → spend key (B_spend)
+- `m/352'/0'/0'/1'/0` → scan key (B_scan)
+
+**Same mnemonic + same network = same SP address every time.**
+
+This is intentional - a recipient's SP address is like their "permanent" receiving address. They share it publicly and can receive unlimited payments to it. The privacy magic happens on the *sender's* side.
+
+## Why is the PSBT Different Each Time?
+
+Each time you click "Generate PSBT", you'll get a different PSBT even for the same SP address and amount. This is expected and happens because:
+
+1. **Random input txid** - Each PSBT uses a newly generated random fake txid as its input. Since the Silent Payment output derivation depends on the input outpoints, different txids produce different SP outputs.
+
+2. **Random DLEQ nonce** - The BIP-374 DLEQ proof uses a random nonce `k` for security. This makes each proof unique while still being valid.
+
+This is the core privacy feature of Silent Payments: **every payment to the same SP address produces a different on-chain output address**. An observer cannot link multiple payments to the same recipient by looking at the blockchain.
 
 ## Testing With Hardware Wallets
 

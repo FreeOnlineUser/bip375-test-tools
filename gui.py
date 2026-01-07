@@ -35,7 +35,7 @@ class BIP375TestToolGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("BIP-375 Silent Payment Test Tool")
-        self.root.geometry("900x700")
+        self.root.geometry("1000x750")
 
         # Variables
         self.mnemonic_var = tk.StringVar(value=DEFAULT_MNEMONIC)
@@ -44,9 +44,9 @@ class BIP375TestToolGUI:
         self.amount_var = tk.StringVar(value="100000")
         self.psbt_var = tk.StringVar()
 
-        # Current QR data
-        self.current_qr_data = None
-        self.qr_label = None
+        # QR labels
+        self.sp_qr_label = None
+        self.psbt_qr_label = None
 
         self._create_widgets()
 
@@ -57,20 +57,21 @@ class BIP375TestToolGUI:
 
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
+        main_frame.columnconfigure(0, weight=1)
 
         row = 0
 
         # === Mnemonic Section ===
         ttk.Label(main_frame, text="Mnemonic:", font=("", 10, "bold")).grid(
-            row=row, column=0, sticky="nw", pady=(0, 5)
+            row=row, column=0, sticky="w", pady=(0, 5)
         )
+        row += 1
 
         mnemonic_frame = ttk.Frame(main_frame)
-        mnemonic_frame.grid(row=row, column=1, sticky="ew", pady=(0, 5))
+        mnemonic_frame.grid(row=row, column=0, sticky="ew", pady=(0, 5))
         mnemonic_frame.columnconfigure(0, weight=1)
 
-        self.mnemonic_entry = ttk.Entry(mnemonic_frame, textvariable=self.mnemonic_var, width=80)
+        self.mnemonic_entry = ttk.Entry(mnemonic_frame, textvariable=self.mnemonic_var, width=100)
         self.mnemonic_entry.grid(row=0, column=0, sticky="ew")
 
         ttk.Button(mnemonic_frame, text="Default", command=self._reset_mnemonic, width=8).grid(
@@ -80,122 +81,127 @@ class BIP375TestToolGUI:
         row += 1
 
         # === Network Selection ===
-        ttk.Label(main_frame, text="Network:", font=("", 10, "bold")).grid(
-            row=row, column=0, sticky="w", pady=5
-        )
-
         network_frame = ttk.Frame(main_frame)
-        network_frame.grid(row=row, column=1, sticky="w", pady=5)
+        network_frame.grid(row=row, column=0, sticky="w", pady=5)
 
+        ttk.Label(network_frame, text="Network:", font=("", 10, "bold")).grid(row=0, column=0, padx=(0, 10))
         ttk.Radiobutton(network_frame, text="Mainnet (sp1...)",
-                       variable=self.network_var, value="mainnet").grid(row=0, column=0)
+                       variable=self.network_var, value="mainnet").grid(row=0, column=1)
         ttk.Radiobutton(network_frame, text="Testnet (tsp1...)",
-                       variable=self.network_var, value="testnet").grid(row=0, column=1, padx=(20, 0))
+                       variable=self.network_var, value="testnet").grid(row=0, column=2, padx=(20, 0))
 
         row += 1
 
-        # === Generate SP Address Button ===
+        # === Two-column layout for SP Address and PSBT ===
         ttk.Separator(main_frame, orient="horizontal").grid(
-            row=row, column=0, columnspan=2, sticky="ew", pady=10
+            row=row, column=0, sticky="ew", pady=10
         )
         row += 1
 
-        ttk.Button(main_frame, text="1. Generate SP Address",
+        columns_frame = ttk.Frame(main_frame)
+        columns_frame.grid(row=row, column=0, sticky="nsew", pady=5)
+        columns_frame.columnconfigure(0, weight=1)
+        columns_frame.columnconfigure(1, weight=1)
+
+        # === LEFT COLUMN: SP Address ===
+        left_frame = ttk.LabelFrame(columns_frame, text="Step 1: SP Address", padding=10)
+        left_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        left_frame.columnconfigure(0, weight=1)
+
+        ttk.Button(left_frame, text="Generate SP Address",
                   command=self._generate_sp_address, width=25).grid(
-            row=row, column=0, columnspan=2, pady=5
-        )
-        row += 1
-
-        # === SP Address Display ===
-        ttk.Label(main_frame, text="SP Address:", font=("", 10, "bold")).grid(
-            row=row, column=0, sticky="nw", pady=5
+            row=0, column=0, pady=(0, 10)
         )
 
-        sp_frame = ttk.Frame(main_frame)
-        sp_frame.grid(row=row, column=1, sticky="ew", pady=5)
-        sp_frame.columnconfigure(0, weight=1)
+        # SP Address entry
+        sp_entry_frame = ttk.Frame(left_frame)
+        sp_entry_frame.grid(row=1, column=0, sticky="ew", pady=(0, 5))
+        sp_entry_frame.columnconfigure(0, weight=1)
 
-        self.sp_entry = ttk.Entry(sp_frame, textvariable=self.sp_address_var, width=80)
+        self.sp_entry = ttk.Entry(sp_entry_frame, textvariable=self.sp_address_var, width=50)
         self.sp_entry.grid(row=0, column=0, sticky="ew")
 
-        ttk.Button(sp_frame, text="Show QR", command=self._show_sp_qr, width=10).grid(
+        ttk.Button(sp_entry_frame, text="Copy", command=self._copy_sp_address, width=6).grid(
             row=0, column=1, padx=(5, 0)
         )
-        ttk.Button(sp_frame, text="Copy", command=self._copy_sp_address, width=6).grid(
-            row=0, column=2, padx=(5, 0)
-        )
 
-        row += 1
+        # SP Address QR code
+        sp_qr_frame = ttk.Frame(left_frame, relief="sunken", borderwidth=2)
+        sp_qr_frame.grid(row=2, column=0, sticky="n", pady=5)
 
-        # === Amount ===
-        ttk.Separator(main_frame, orient="horizontal").grid(
-            row=row, column=0, columnspan=2, sticky="ew", pady=10
-        )
-        row += 1
+        self.sp_qr_label = ttk.Label(sp_qr_frame, text="SP Address QR\nwill appear here",
+                                     padding=20, anchor="center", justify="center",
+                                     width=30)
+        self.sp_qr_label.grid(row=0, column=0)
 
-        ttk.Label(main_frame, text="Amount (sats):", font=("", 10, "bold")).grid(
-            row=row, column=0, sticky="w", pady=5
-        )
+        # === RIGHT COLUMN: PSBT ===
+        right_frame = ttk.LabelFrame(columns_frame, text="Step 2: BIP-375 PSBT", padding=10)
+        right_frame.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+        right_frame.columnconfigure(0, weight=1)
 
-        amount_frame = ttk.Frame(main_frame)
-        amount_frame.grid(row=row, column=1, sticky="w", pady=5)
+        # Amount input
+        amount_frame = ttk.Frame(right_frame)
+        amount_frame.grid(row=0, column=0, sticky="w", pady=(0, 10))
 
-        ttk.Entry(amount_frame, textvariable=self.amount_var, width=15).grid(row=0, column=0)
-        ttk.Label(amount_frame, text="satoshis").grid(row=0, column=1, padx=(5, 0))
+        ttk.Label(amount_frame, text="Amount:").grid(row=0, column=0)
+        ttk.Entry(amount_frame, textvariable=self.amount_var, width=12).grid(row=0, column=1, padx=(5, 0))
+        ttk.Label(amount_frame, text="sats").grid(row=0, column=2, padx=(5, 0))
 
-        row += 1
+        ttk.Button(amount_frame, text="Generate PSBT",
+                  command=self._generate_psbt, width=15).grid(row=0, column=3, padx=(15, 0))
 
-        # === Generate PSBT Button ===
-        ttk.Button(main_frame, text="2. Generate BIP-375 PSBT",
-                  command=self._generate_psbt, width=25).grid(
-            row=row, column=0, columnspan=2, pady=10
-        )
-        row += 1
+        # PSBT text area
+        psbt_text_frame = ttk.Frame(right_frame)
+        psbt_text_frame.grid(row=1, column=0, sticky="ew", pady=(0, 5))
+        psbt_text_frame.columnconfigure(0, weight=1)
 
-        # === PSBT Display ===
-        ttk.Label(main_frame, text="PSBT (base64):", font=("", 10, "bold")).grid(
-            row=row, column=0, sticky="nw", pady=5
-        )
-
-        psbt_frame = ttk.Frame(main_frame)
-        psbt_frame.grid(row=row, column=1, sticky="ew", pady=5)
-        psbt_frame.columnconfigure(0, weight=1)
-
-        self.psbt_text = tk.Text(psbt_frame, height=4, width=70, wrap="char")
+        self.psbt_text = tk.Text(psbt_text_frame, height=3, width=50, wrap="char")
         self.psbt_text.grid(row=0, column=0, sticky="ew")
 
-        psbt_btn_frame = ttk.Frame(psbt_frame)
+        psbt_btn_frame = ttk.Frame(psbt_text_frame)
         psbt_btn_frame.grid(row=0, column=1, sticky="n", padx=(5, 0))
 
-        ttk.Button(psbt_btn_frame, text="Show QR", command=self._show_psbt_qr, width=10).grid(row=0, column=0)
-        ttk.Button(psbt_btn_frame, text="Copy", command=self._copy_psbt, width=10).grid(row=1, column=0, pady=(2, 0))
-        ttk.Button(psbt_btn_frame, text="Save", command=self._save_psbt, width=10).grid(row=2, column=0, pady=(2, 0))
+        ttk.Button(psbt_btn_frame, text="Copy", command=self._copy_psbt, width=6).grid(row=0, column=0)
+        ttk.Button(psbt_btn_frame, text="Save", command=self._save_psbt, width=6).grid(row=1, column=0, pady=(2, 0))
+
+        # PSBT QR code
+        psbt_qr_frame = ttk.Frame(right_frame, relief="sunken", borderwidth=2)
+        psbt_qr_frame.grid(row=2, column=0, sticky="n", pady=5)
+
+        self.psbt_qr_label = ttk.Label(psbt_qr_frame, text="PSBT QR\nwill appear here",
+                                       padding=20, anchor="center", justify="center",
+                                       width=30)
+        self.psbt_qr_label.grid(row=0, column=0)
 
         row += 1
 
-        # === QR Code Display Area ===
-        ttk.Separator(main_frame, orient="horizontal").grid(
-            row=row, column=0, columnspan=2, sticky="ew", pady=10
-        )
+        # === Warning Label ===
+        warning_frame = ttk.Frame(main_frame)
+        warning_frame.grid(row=row, column=0, sticky="ew", pady=(5, 0))
+
+        warning_text = "FOR TESTING ONLY: PSBTs reference non-existent inputs and cannot be broadcast to the network."
+        warning_label = ttk.Label(warning_frame, text=warning_text, foreground="red", font=("", 9, "bold"))
+        warning_label.grid(row=0, column=0, sticky="w")
+
         row += 1
 
-        ttk.Label(main_frame, text="QR Code:", font=("", 10, "bold")).grid(
-            row=row, column=0, sticky="nw", pady=5
-        )
+        # === Info Labels ===
+        info_text1 = "SP address is always the same (derived from mnemonic). PSBT changes each click (random txid + DLEQ nonce)."
+        info_label1 = ttk.Label(main_frame, text=info_text1, foreground="gray", font=("", 8))
+        info_label1.grid(row=row, column=0, sticky="w", pady=(2, 0))
 
-        qr_frame = ttk.Frame(main_frame, relief="sunken", borderwidth=2)
-        qr_frame.grid(row=row, column=1, sticky="w", pady=5)
+        row += 1
 
-        self.qr_label = ttk.Label(qr_frame, text="Click 'Show QR' to display\na QR code for SeedSigner",
-                                  padding=20, anchor="center", justify="center")
-        self.qr_label.grid(row=0, column=0)
+        info_text2 = "This is the privacy feature: same SP address -> different on-chain output each time."
+        info_label2 = ttk.Label(main_frame, text=info_text2, foreground="gray", font=("", 8))
+        info_label2.grid(row=row, column=0, sticky="w", pady=(0, 0))
 
         row += 1
 
         # === Status Bar ===
         self.status_var = tk.StringVar(value="Ready. Generate an SP address to get started.")
         status_bar = ttk.Label(main_frame, textvariable=self.status_var, relief="sunken", anchor="w")
-        status_bar.grid(row=row, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        status_bar.grid(row=row, column=0, sticky="ew", pady=(5, 0))
 
     def _reset_mnemonic(self):
         self.mnemonic_var.set(DEFAULT_MNEMONIC)
@@ -235,22 +241,19 @@ class BIP375TestToolGUI:
             self.psbt_text.delete("1.0", tk.END)
             self.psbt_text.insert("1.0", psbt_base64)
 
-            self.status_var.set(f"Generated BIP-375 PSBT: {len(psbt_base64)} chars, output: {output_xonly.hex()[:16]}...")
+            self.status_var.set(f"Generated BIP-375 PSBT: {len(psbt_base64)} chars")
             self._show_psbt_qr()  # Auto-show QR
 
         except Exception as e:
             messagebox.showerror("Error", f"Failed to generate PSBT:\n{e}")
             self.status_var.set(f"Error: {e}")
 
-    def _show_qr(self, data: str, label: str):
+    def _generate_qr_image(self, data: str, size: int = 200):
+        """Generate a QR code image."""
         if not HAS_QR:
-            messagebox.showwarning("Missing Dependencies",
-                "QR code display requires 'qrcode' and 'Pillow' packages.\n\n"
-                "Install with: pip install qrcode[pil]")
-            return
+            return None
 
         try:
-            # Generate QR code
             qr = qrcode.QRCode(
                 version=None,
                 error_correction=qrcode.constants.ERROR_CORRECT_L,
@@ -268,31 +271,48 @@ class BIP375TestToolGUI:
             img_bytes.seek(0)
 
             pil_img = Image.open(img_bytes)
-            photo = ImageTk.PhotoImage(pil_img)
 
-            # Update label
-            self.qr_label.configure(image=photo, text="")
-            self.qr_label.image = photo  # Keep reference
+            # Resize if needed to fit better
+            if pil_img.width > size or pil_img.height > size:
+                pil_img.thumbnail((size, size), Image.Resampling.LANCZOS)
 
-            self.current_qr_data = data
-            self.status_var.set(f"Showing QR for {label} ({len(data)} chars)")
+            return ImageTk.PhotoImage(pil_img)
 
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to generate QR code:\n{e}")
+            print(f"QR generation error: {e}")
+            return None
 
     def _show_sp_qr(self):
+        if not HAS_QR:
+            messagebox.showwarning("Missing Dependencies",
+                "QR code display requires 'qrcode' and 'Pillow' packages.\n\n"
+                "Install with: pip install qrcode[pil]")
+            return
+
         sp_addr = self.sp_address_var.get().strip()
         if sp_addr:
-            self._show_qr(sp_addr, "SP Address")
+            photo = self._generate_qr_image(sp_addr, size=250)
+            if photo:
+                self.sp_qr_label.configure(image=photo, text="")
+                self.sp_qr_label.image = photo  # Keep reference
         else:
-            messagebox.showinfo("Info", "No SP address to display")
+            self.sp_qr_label.configure(image="", text="SP Address QR\nwill appear here")
 
     def _show_psbt_qr(self):
+        if not HAS_QR:
+            messagebox.showwarning("Missing Dependencies",
+                "QR code display requires 'qrcode' and 'Pillow' packages.\n\n"
+                "Install with: pip install qrcode[pil]")
+            return
+
         psbt = self.psbt_text.get("1.0", tk.END).strip()
         if psbt:
-            self._show_qr(psbt, "PSBT")
+            photo = self._generate_qr_image(psbt, size=250)
+            if photo:
+                self.psbt_qr_label.configure(image=photo, text="")
+                self.psbt_qr_label.image = photo  # Keep reference
         else:
-            messagebox.showinfo("Info", "No PSBT to display")
+            self.psbt_qr_label.configure(image="", text="PSBT QR\nwill appear here")
 
     def _copy_sp_address(self):
         sp_addr = self.sp_address_var.get()

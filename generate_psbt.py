@@ -356,6 +356,9 @@ def generate_dleq_proof(a: int, A: bytes, B_scan: bytes) -> tuple:
 
     Proves that C = a * B_scan where A = a * G, without revealing 'a'.
 
+    Per BIP-374, the challenge is computed as:
+    e = hash_BIP0374/challenge(A || B || C || G || R1 || R2)
+
     Args:
         a: Private key scalar
         A: Public key A = a * G (33 bytes compressed)
@@ -366,6 +369,9 @@ def generate_dleq_proof(a: int, A: bytes, B_scan: bytes) -> tuple:
     """
     import secrets
 
+    # Generator point G (compressed)
+    G_bytes = unhexlify("0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798")
+
     # C = a * B_scan (tweak_mul modifies in-place)
     B_scan_point = secp256k1.ec_pubkey_parse(B_scan)
     secp256k1.ec_pubkey_tweak_mul(B_scan_point, a.to_bytes(32, 'big'))
@@ -375,18 +381,18 @@ def generate_dleq_proof(a: int, A: bytes, B_scan: bytes) -> tuple:
     k = secrets.randbelow(SECP256K1_ORDER - 1) + 1
 
     # R1 = k * G (tweak_mul modifies in-place)
-    G = secp256k1.ec_pubkey_parse(unhexlify("0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798"))
-    secp256k1.ec_pubkey_tweak_mul(G, k.to_bytes(32, 'big'))
-    R1 = secp256k1.ec_pubkey_serialize(G, secp256k1.EC_COMPRESSED)
+    G_point = secp256k1.ec_pubkey_parse(G_bytes)
+    secp256k1.ec_pubkey_tweak_mul(G_point, k.to_bytes(32, 'big'))
+    R1 = secp256k1.ec_pubkey_serialize(G_point, secp256k1.EC_COMPRESSED)
 
     # R2 = k * B_scan (need fresh parse since B_scan_point was modified)
     B_scan_point2 = secp256k1.ec_pubkey_parse(B_scan)
     secp256k1.ec_pubkey_tweak_mul(B_scan_point2, k.to_bytes(32, 'big'))
     R2 = secp256k1.ec_pubkey_serialize(B_scan_point2, secp256k1.EC_COMPRESSED)
 
-    # e = hash(A || B_scan || C || R1 || R2)
-    e_preimage = A + B_scan + C + R1 + R2
-    e = int.from_bytes(sha256(e_preimage).digest(), 'big') % SECP256K1_ORDER
+    # BIP-374: e = hash_BIP0374/challenge(A || B || C || G || R1 || R2)
+    e_preimage = A + B_scan + C + G_bytes + R1 + R2
+    e = int.from_bytes(tagged_hash("BIP0374/challenge", e_preimage), 'big') % SECP256K1_ORDER
 
     # s = k + e * a mod n
     s = (k + e * a) % SECP256K1_ORDER
@@ -530,11 +536,10 @@ def create_bip375_psbt(
     psbt.unknown[dleq_key] = dleq_proof
 
     # Output: SP V0 info (key: 0x09, value: B_scan || B_spend)
+    # IMPORTANT: Always assign a NEW dict to avoid embit's shared mutable default bug
     out = psbt.outputs[0]
-    if not hasattr(out, 'unknown') or out.unknown is None:
-        out.unknown = {}
     sp_info_key = bytes([PSBT_OUT_SP_V0_INFO])
-    out.unknown[sp_info_key] = B_scan + B_spend
+    out.unknown = {sp_info_key: B_scan + B_spend}
 
     # Serialize to base64
     psbt_base64 = psbt.to_string()

@@ -198,9 +198,17 @@ class BIP375TestToolGUI:
         ttk.Button(amount_frame, text="Generate PSBT",
                   command=self._generate_psbt, width=15).grid(row=0, column=3, padx=(15, 0))
 
+        # Explainer for PSBT generation
+        psbt_explainer = (
+            "In production, your wallet (Sparrow, BlueWallet) generates this BIP-375 PSBT "
+            "so signing devices can verify the Silent Payment output."
+        )
+        ttk.Label(right_frame, text=psbt_explainer, foreground="gray", font=("", 8),
+                 wraplength=400, justify="left").grid(row=3, column=0, sticky="w", pady=(0, 5))
+
         # QR Mode toggle
         qr_mode_frame = ttk.Frame(right_frame)
-        qr_mode_frame.grid(row=3, column=0, sticky="w", pady=(0, 5))
+        qr_mode_frame.grid(row=4, column=0, sticky="w", pady=(0, 5))
 
         ttk.Label(qr_mode_frame, text="QR Mode:").grid(row=0, column=0, padx=(0, 5))
         anim_rb = ttk.Radiobutton(qr_mode_frame, text="Animated (UR)",
@@ -219,7 +227,7 @@ class BIP375TestToolGUI:
 
         # Derived output address (bc1p...)
         output_addr_frame = ttk.Frame(right_frame)
-        output_addr_frame.grid(row=4, column=0, sticky="ew", pady=(0, 5))
+        output_addr_frame.grid(row=5, column=0, sticky="ew", pady=(0, 5))
         output_addr_frame.columnconfigure(1, weight=1)
 
         ttk.Label(output_addr_frame, text="Output:", font=("", 9, "bold")).grid(row=0, column=0, padx=(0, 5))
@@ -230,7 +238,7 @@ class BIP375TestToolGUI:
 
         # PSBT text area
         psbt_text_frame = ttk.Frame(right_frame)
-        psbt_text_frame.grid(row=5, column=0, sticky="ew", pady=(0, 5))
+        psbt_text_frame.grid(row=6, column=0, sticky="ew", pady=(0, 5))
         psbt_text_frame.columnconfigure(0, weight=1)
 
         self.psbt_text = tk.Text(psbt_text_frame, height=3, width=50, wrap="char")
@@ -244,7 +252,7 @@ class BIP375TestToolGUI:
 
         # PSBT QR code
         psbt_qr_frame = ttk.Frame(right_frame, relief="sunken", borderwidth=2)
-        psbt_qr_frame.grid(row=6, column=0, sticky="n", pady=5)
+        psbt_qr_frame.grid(row=7, column=0, sticky="n", pady=5)
 
         self.psbt_qr_label = ttk.Label(psbt_qr_frame, text="PSBT QR\nwill appear here",
                                        padding=20, anchor="center", justify="center",
@@ -254,11 +262,11 @@ class BIP375TestToolGUI:
         # Camera scan button
         scan_btn = ttk.Button(right_frame, text="Use Camera to Verify Signed Transaction",
                              command=self._scan_signed_psbt)
-        scan_btn.grid(row=7, column=0, pady=(5, 0))
+        scan_btn.grid(row=8, column=0, pady=(5, 0))
         if not HAS_CAMERA:
             scan_btn.configure(state="disabled")
             ttk.Label(right_frame, text="(pip install opencv-python pyzbar)",
-                     foreground="gray", font=("", 8)).grid(row=8, column=0)
+                     foreground="gray", font=("", 8)).grid(row=9, column=0)
 
         row += 1
 

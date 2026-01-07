@@ -33,17 +33,32 @@ The GUI provides:
 
 - Generate SP addresses from any mnemonic (mainnet or testnet)
 - Generate BIP-375 PSBTs with all required fields
-- Display QR codes for SeedSigner to scan
-- Copy/save functionality
+- Animated UR QR codes for easy scanning
+- Seed QR export for loading sender key into SeedSigner
+- Camera scanning to verify signed PSBTs
+- Transaction details display after verification
 
 **Workflow:**
 
-1. Enter a mnemonic or use the default test mnemonic
-2. Click "Generate SP Address" - QR code appears
-3. Scan the SP address QR with SeedSigner (optional pre-verification)
-4. Set amount and click "Generate BIP-375 PSBT"
-5. Scan the PSBT QR with SeedSigner
-6. SeedSigner should show the SP address with BIP-375 verification
+1. **Recipient SP Address** (left panel):
+   - Enter recipient mnemonic or use default
+   - Click "Generate SP Address" - QR code appears
+
+2. **Sender PSBT** (right panel):
+   - Enter sender mnemonic (different from recipient)
+   - Click "Seed QR" to display the sender seed for SeedSigner
+   - Load the seed into SeedSigner via Scan > Scan a SeedQR
+
+3. **Generate and Sign:**
+   - Set amount and click "Generate PSBT"
+   - Scan the animated PSBT QR with SeedSigner
+   - SeedSigner verifies BIP-375 and shows the SP address
+   - Approve and sign on SeedSigner
+
+4. **Verify Signature:**
+   - Click "Use Camera to Verify Signed Transaction"
+   - Point webcam at SeedSigner's animated QR code
+   - Tool verifies signature and displays transaction details
 
 ### Command Line
 
@@ -120,6 +135,20 @@ This is the core privacy feature of Silent Payments: **every payment to the same
 The generated PSBTs can be used to test Silent Payment verification in:
 - SeedSigner (with BIP-352/375 support)
 - Other hardware signers implementing BIP-375
+
+## Dependencies
+
+**Required:**
+
+- `embit` - Bitcoin library for PSBT/transaction handling
+- `qrcode[pil]` - QR code generation
+- `Pillow` - Image processing
+- `urtypes` - Uniform Resources (UR) encoding for animated QR codes
+
+**Optional (for camera scanning):**
+
+- `opencv-python` - Webcam capture
+- `pyzbar` - QR code decoding
 
 ## Related BIPs
 

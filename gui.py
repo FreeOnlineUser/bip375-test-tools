@@ -259,14 +259,19 @@ class BIP375TestToolGUI:
                                        width=30)
         self.psbt_qr_label.grid(row=0, column=0)
 
+        # Step 3: Verify Signed Transaction
+        ttk.Label(right_frame, text="Step 3: Verify Signed Transaction", font=("", 10, "bold")).grid(
+            row=8, column=0, sticky="w", pady=(15, 5)
+        )
+
         # Camera scan button
         scan_btn = ttk.Button(right_frame, text="Use Camera to Verify Signed Transaction",
                              command=self._scan_signed_psbt)
-        scan_btn.grid(row=8, column=0, pady=(5, 0))
+        scan_btn.grid(row=9, column=0, pady=(5, 0))
         if not HAS_CAMERA:
             scan_btn.configure(state="disabled")
             ttk.Label(right_frame, text="(pip install opencv-python pyzbar)",
-                     foreground="gray", font=("", 8)).grid(row=9, column=0)
+                     foreground="gray", font=("", 8)).grid(row=10, column=0)
 
         row += 1
 

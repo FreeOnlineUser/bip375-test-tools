@@ -103,11 +103,23 @@ print(f"Derived output: {output_xonly.hex()}")
 
 ## How It Works
 
+In a real Silent Payment workflow, your coordinator wallet (Sparrow, BlueWallet, etc.) would:
+
+1. Take the recipient's `sp1...` address
+2. Select UTXOs to spend from your wallet
+3. Derive the unique output address using BIP-352
+4. Build a PSBT with BIP-375 fields so your signing device can verify the derivation
+5. Send the PSBT to your hardware signer for approval
+
+**This tool simulates step 4** - it generates the same BIP-375 PSBT that a coordinator wallet would create, allowing you to test hardware signer verification without needing a full wallet setup or real UTXOs.
+
+**PSBT generation steps:**
+
 1. **Parses SP address** - Extracts B_scan and B_spend public keys
 2. **Generates input key** - Derives Taproot key from mnemonic at m/86'/0'/0'/0/0
-3. **Computes SP output** - Derives the expected Taproot output per BIP-352
-4. **Generates DLEQ proof** - Creates BIP-374 proof that ECDH was computed correctly
-5. **Builds PSBT** - Creates transaction with all BIP-375 fields populated
+3. **Computes SP output** - Derives the unique Taproot output address per BIP-352
+4. **Generates DLEQ proof** - Creates BIP-374 proof that the ECDH was computed correctly
+5. **Builds PSBT** - Embeds BIP-375 fields so the signer can independently verify the output
 
 ## Why is the SP Address Always the Same?
 

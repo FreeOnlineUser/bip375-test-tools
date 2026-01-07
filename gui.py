@@ -671,6 +671,58 @@ class BIP375TestToolGUI:
         )
         self.camera_scanner.start()
 
+    def _extract_tx_details(self, signed_psbt) -> str:
+        """Extract human-readable transaction details from PSBT."""
+        tx = signed_psbt.tx
+        lines = []
+
+        # Number of inputs
+        lines.append(f"Inputs: {len(tx.vin)}")
+
+        # Calculate total input value from witness UTXOs
+        total_input = 0
+        for inp in signed_psbt.inputs:
+            if inp.witness_utxo:
+                total_input += inp.witness_utxo.value
+
+        # Output details
+        lines.append(f"Outputs: {len(tx.vout)}")
+        total_output = 0
+        for i, out in enumerate(tx.vout):
+            total_output += out.value
+            # Convert output script to address
+            addr = self._script_to_address(out.script_pubkey)
+            amount_btc = out.value / 100_000_000
+            lines.append(f"  [{i}] {amount_btc:.8f} BTC → {addr[:20]}...")
+
+        # Fee calculation
+        if total_input > 0:
+            fee = total_input - total_output
+            fee_rate = fee / (len(tx.serialize()) / 4)  # vbytes approximation
+            lines.append(f"Fee: {fee} sats (~{fee_rate:.1f} sat/vB)")
+
+        # Total amount
+        total_btc = total_output / 100_000_000
+        lines.append(f"Total: {total_btc:.8f} BTC ({total_output} sats)")
+
+        return "\n".join(lines)
+
+    def _script_to_address(self, script_pubkey) -> str:
+        """Convert a script pubkey to a bech32m address."""
+        script_bytes = script_pubkey.data if hasattr(script_pubkey, 'data') else bytes(script_pubkey)
+
+        # Check for Taproot (witness v1, 32-byte program)
+        if len(script_bytes) == 34 and script_bytes[0] == 0x51 and script_bytes[1] == 0x20:
+            # Taproot output
+            xonly_pubkey = script_bytes[2:]
+            # Determine network from current SP address
+            sp_addr = self.sp_address_var.get()
+            hrp = "tb" if sp_addr.startswith("tsp1") else "bc"
+            return self._xonly_to_bech32m(xonly_pubkey, hrp)
+
+        # Fallback: return hex
+        return script_bytes.hex()
+
     def _on_psbt_scanned(self, signed_psbt_base64: str):
         """Called when a signed PSBT is successfully scanned."""
         try:
@@ -691,15 +743,25 @@ class BIP375TestToolGUI:
                     has_signature = True
                     break
 
+            # Extract transaction details
+            tx = signed_psbt.tx
+            tx_details = self._extract_tx_details(signed_psbt)
+
             if has_signature:
                 messagebox.showinfo("Signature Verified",
-                    "The signed PSBT contains a valid Taproot signature.\n\n"
-                    "The signing flow completed successfully!")
+                    f"The signed PSBT contains a valid Taproot signature.\n\n"
+                    f"Transaction Details:\n"
+                    f"─────────────────────\n"
+                    f"{tx_details}\n\n"
+                    f"The signing flow completed successfully!")
                 self.status_var.set("Signed PSBT verified - signature present")
             else:
                 messagebox.showwarning("No Signature Found",
-                    "The PSBT was scanned but no signature was found.\n\n"
-                    "Make sure SeedSigner approved and signed the transaction.")
+                    f"The PSBT was scanned but no signature was found.\n\n"
+                    f"Transaction Details:\n"
+                    f"─────────────────────\n"
+                    f"{tx_details}\n\n"
+                    f"Make sure SeedSigner approved and signed the transaction.")
                 self.status_var.set("Scanned PSBT has no signature")
 
         except Exception as e:

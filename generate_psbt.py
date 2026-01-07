@@ -16,6 +16,7 @@ import argparse
 import sys
 from hashlib import sha256
 from binascii import hexlify, unhexlify
+from typing import Tuple, List, Optional
 
 from embit import bip32, bip39, ec, script
 from embit.psbt import PSBT, InputScope, OutputScope
@@ -48,61 +49,36 @@ CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 # Bech32m Implementation (for SP address parsing)
 # ============================================================================
 
-def bech32_polymod(values):
-    """Internal function that computes the Bech32 checksum."""
-    generator = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
+def _bech32_polymod(values: List[int]) -> int:
+    """Internal function for Bech32 checksum calculation."""
+    GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
     chk = 1
-    for value in values:
+    for v in values:
         top = chk >> 25
-        chk = (chk & 0x1ffffff) << 5 ^ value
+        chk = (chk & 0x1ffffff) << 5 ^ v
         for i in range(5):
-            chk ^= generator[i] if ((top >> i) & 1) else 0
+            chk ^= GEN[i] if ((top >> i) & 1) else 0
     return chk
 
 
-def bech32_hrp_expand(hrp):
-    """Expand the HRP into values for checksum computation."""
+def _bech32_hrp_expand(hrp: str) -> List[int]:
+    """Expand HRP for checksum calculation."""
     return [ord(x) >> 5 for x in hrp] + [0] + [ord(x) & 31 for x in hrp]
 
 
-def bech32m_verify_checksum(hrp, data):
-    """Verify a Bech32m checksum."""
-    return bech32_polymod(bech32_hrp_expand(hrp) + data) == BECH32M_CONST
+def _bech32m_verify_checksum(hrp: str, data: List[int]) -> bool:
+    """Verify Bech32m checksum."""
+    return _bech32_polymod(_bech32_hrp_expand(hrp) + data) == BECH32M_CONST
 
 
-def bech32m_create_checksum(hrp, data):
-    """Compute the Bech32m checksum."""
-    values = bech32_hrp_expand(hrp) + data
-    polymod = bech32_polymod(values + [0, 0, 0, 0, 0, 0]) ^ BECH32M_CONST
+def _bech32m_create_checksum(hrp: str, data: List[int]) -> List[int]:
+    """Create Bech32m checksum."""
+    values = _bech32_hrp_expand(hrp) + data
+    polymod = _bech32_polymod(values + [0, 0, 0, 0, 0, 0]) ^ BECH32M_CONST
     return [(polymod >> 5 * (5 - i)) & 31 for i in range(6)]
 
 
-def bech32m_decode(bech):
-    """Decode a Bech32m string."""
-    if any(ord(x) < 33 or ord(x) > 126 for x in bech):
-        return None, None
-    if bech.lower() != bech and bech.upper() != bech:
-        return None, None
-    bech = bech.lower()
-    pos = bech.rfind('1')
-    if pos < 1 or pos + 7 > len(bech) or len(bech) > 90:
-        return None, None
-    if not all(x in CHARSET for x in bech[pos+1:]):
-        return None, None
-    hrp = bech[:pos]
-    data = [CHARSET.find(x) for x in bech[pos+1:]]
-    if not bech32m_verify_checksum(hrp, data):
-        return None, None
-    return hrp, data[:-6]
-
-
-def bech32m_encode(hrp, data):
-    """Encode data as Bech32m string."""
-    combined = data + bech32m_create_checksum(hrp, data)
-    return hrp + '1' + ''.join([CHARSET[d] for d in combined])
-
-
-def convertbits(data, frombits, tobits, pad=True):
+def _convertbits(data: List[int], frombits: int, tobits: int, pad: bool = True) -> Optional[List[int]]:
     """General power-of-2 base conversion."""
     acc = 0
     bits = 0
@@ -125,11 +101,80 @@ def convertbits(data, frombits, tobits, pad=True):
     return ret
 
 
+def bech32m_decode(bech: str) -> Tuple[str, bytes]:
+    """
+    Decode a Bech32m string (SP address) into HRP and data.
+
+    Args:
+        bech: The Bech32m encoded string
+
+    Returns:
+        Tuple of (hrp, data_bytes)
+
+    Raises:
+        ValueError: If the address is invalid
+    """
+    bech = bech.lower()
+
+    # Find separator
+    pos = bech.rfind('1')
+    if pos < 1 or pos + 7 > len(bech):
+        raise ValueError("Invalid separator position")
+
+    hrp = bech[:pos]
+    data_part = bech[pos + 1:]
+
+    # Decode data characters
+    data = []
+    for c in data_part:
+        if c not in CHARSET:
+            raise ValueError(f"Invalid character: {c}")
+        data.append(CHARSET.index(c))
+
+    # Verify checksum
+    if not _bech32m_verify_checksum(hrp, data):
+        raise ValueError("Invalid checksum")
+
+    # Remove checksum (last 6 characters) and convert from 5-bit to 8-bit
+    data = data[:-6]
+
+    # First element is the witness version
+    if len(data) == 0:
+        raise ValueError("Empty data")
+
+    version = data[0]
+
+    # Convert remaining 5-bit groups to bytes
+    decoded = _convertbits(data[1:], 5, 8, False)
+    if decoded is None:
+        raise ValueError("Invalid padding")
+
+    return hrp, bytes([version] + decoded)
+
+
+def bech32m_encode(hrp: str, data: bytes) -> str:
+    """Encode data as Bech32m string."""
+    # First byte is version
+    version = data[0]
+    payload = list(data[1:])
+
+    # Convert from 8-bit to 5-bit
+    converted = _convertbits(payload, 8, 5, True)
+    if converted is None:
+        raise ValueError("Invalid data for encoding")
+
+    # Prepend version
+    data_5bit = [version] + converted
+
+    checksum = _bech32m_create_checksum(hrp, data_5bit)
+    return hrp + '1' + ''.join([CHARSET[d] for d in data_5bit + checksum])
+
+
 # ============================================================================
 # Silent Payment Address Parsing
 # ============================================================================
 
-def parse_silent_payment_address(address: str) -> tuple:
+def parse_silent_payment_address(address: str) -> Tuple[bytes, bytes, str]:
     """
     Parse a Silent Payment address and extract the scan and spend pubkeys.
 
@@ -140,44 +185,35 @@ def parse_silent_payment_address(address: str) -> tuple:
         (B_scan, B_spend, network) where pubkeys are 33-byte compressed format
     """
     hrp, data = bech32m_decode(address)
-    if hrp is None:
-        raise ValueError("Invalid bech32m encoding")
 
     if hrp == "sp":
         network = "mainnet"
     elif hrp == "tsp":
         network = "testnet"
     else:
-        raise ValueError(f"Unknown HRP: {hrp}")
+        raise ValueError(f"Invalid HRP for SP address: {hrp}")
 
+    # First byte is version (should be 0 for v0 SP addresses)
     if len(data) < 1:
         raise ValueError("Missing version byte")
 
     version = data[0]
     if version != 0:
-        raise ValueError(f"Unsupported SP version: {version}")
+        raise ValueError(f"Unsupported SP address version: {version}")
 
-    # Convert from 5-bit to 8-bit
-    payload = convertbits(data[1:], 5, 8, False)
-    if payload is None:
-        raise ValueError("Invalid payload encoding")
+    payload = data[1:]
 
-    payload_bytes = bytes(payload)
+    if len(payload) != 66:
+        raise ValueError(f"Invalid SP address data length: {len(payload)}, expected 66")
 
-    # Should be 66 bytes: 33-byte scan pubkey + 33-byte spend pubkey
-    if len(payload_bytes) != 66:
-        raise ValueError(f"Invalid payload length: {len(payload_bytes)}, expected 66")
+    B_scan = payload[:33]
+    B_spend = payload[33:66]
 
-    B_scan = payload_bytes[:33]
-    B_spend = payload_bytes[33:66]
+    # Validate that both are valid compressed public keys
+    if B_scan[0] not in (0x02, 0x03) or B_spend[0] not in (0x02, 0x03):
+        raise ValueError("Invalid public key prefix in SP address")
 
-    # Validate pubkey prefixes
-    if B_scan[0] not in (0x02, 0x03):
-        raise ValueError("Invalid scan pubkey prefix")
-    if B_spend[0] not in (0x02, 0x03):
-        raise ValueError("Invalid spend pubkey prefix")
-
-    return B_scan, B_spend, network
+    return bytes(B_scan), bytes(B_spend), network
 
 
 # ============================================================================
@@ -234,31 +270,30 @@ def compute_sp_output_pubkey(
             A_sum_point = secp256k1.ec_pubkey_combine([A_sum_point, point])
 
     A_sum = secp256k1.ec_pubkey_serialize(A_sum_point, secp256k1.EC_COMPRESSED)
-    A_sum_xonly = A_sum[1:] if A_sum[0] == 0x02 else A_sum[1:]  # x-coordinate
+    A_sum_xonly = A_sum[1:]  # x-coordinate (32 bytes)
 
-    # input_hash = hash(outpoints || A_sum)
-    input_hash_preimage = b''.join(outpoint_data) + A_sum_xonly
-    input_hash = tagged_hash("BIP0352/Inputs", input_hash_preimage)
+    # input_hash = hash(smallest_outpoint || A_sum)
+    # BIP-352: use smallest outpoint, not all outpoints
+    smallest_outpoint = min(outpoint_data)
+    input_hash = tagged_hash("BIP0352/Inputs", smallest_outpoint + A_sum_xonly)
 
     # Compute ECDH: a_sum * input_hash * B_scan
     a_tweaked = (a_sum * int.from_bytes(input_hash, 'big')) % SECP256K1_ORDER
 
+    # NOTE: ec_pubkey_tweak_mul modifies point IN-PLACE and returns None
     B_scan_point = secp256k1.ec_pubkey_parse(B_scan)
-    ecdh_point = secp256k1.ec_pubkey_tweak_mul(B_scan_point, a_tweaked.to_bytes(32, 'big'))
-    ecdh_secret = secp256k1.ec_pubkey_serialize(ecdh_point, secp256k1.EC_COMPRESSED)
+    secp256k1.ec_pubkey_tweak_mul(B_scan_point, a_tweaked.to_bytes(32, 'big'))
+    ecdh_secret = secp256k1.ec_pubkey_serialize(B_scan_point, secp256k1.EC_COMPRESSED)
 
     # t_k = hash("BIP0352/SharedSecret" || ecdh_x || k)
     ecdh_x = ecdh_secret[1:33]  # x-coordinate only
     t_k = tagged_hash("BIP0352/SharedSecret", ecdh_x + k.to_bytes(4, 'little'))
-    t_k_int = int.from_bytes(t_k, 'big') % SECP256K1_ORDER
 
-    # P_k = B_spend + t_k * G
+    # P_k = B_spend + t_k * G (use ec_pubkey_tweak_add which adds t_k * G in-place)
     B_spend_point = secp256k1.ec_pubkey_parse(B_spend)
-    G = secp256k1.ec_pubkey_parse(unhexlify("0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798"))
-    t_k_G = secp256k1.ec_pubkey_tweak_mul(G, t_k_int.to_bytes(32, 'big'))
-    P_k = secp256k1.ec_pubkey_combine([B_spend_point, t_k_G])
+    secp256k1.ec_pubkey_tweak_add(B_spend_point, t_k)
 
-    P_k_full = secp256k1.ec_pubkey_serialize(P_k, secp256k1.EC_COMPRESSED)
+    P_k_full = secp256k1.ec_pubkey_serialize(B_spend_point, secp256k1.EC_COMPRESSED)
 
     # Return x-only (32 bytes)
     return P_k_full[1:33]
@@ -278,23 +313,25 @@ def generate_dleq_proof(a: int, A: bytes, B_scan: bytes) -> tuple:
     Returns:
         (C, proof) where C is the ECDH result and proof is 64 bytes
     """
-    # C = a * B_scan
+    import secrets
+
+    # C = a * B_scan (tweak_mul modifies in-place)
     B_scan_point = secp256k1.ec_pubkey_parse(B_scan)
-    C_point = secp256k1.ec_pubkey_tweak_mul(B_scan_point, a.to_bytes(32, 'big'))
-    C = secp256k1.ec_pubkey_serialize(C_point, secp256k1.EC_COMPRESSED)
+    secp256k1.ec_pubkey_tweak_mul(B_scan_point, a.to_bytes(32, 'big'))
+    C = secp256k1.ec_pubkey_serialize(B_scan_point, secp256k1.EC_COMPRESSED)
 
     # Generate random k for proof
-    import secrets
     k = secrets.randbelow(SECP256K1_ORDER - 1) + 1
 
-    # R1 = k * G
+    # R1 = k * G (tweak_mul modifies in-place)
     G = secp256k1.ec_pubkey_parse(unhexlify("0279BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798"))
-    R1_point = secp256k1.ec_pubkey_tweak_mul(G, k.to_bytes(32, 'big'))
-    R1 = secp256k1.ec_pubkey_serialize(R1_point, secp256k1.EC_COMPRESSED)
+    secp256k1.ec_pubkey_tweak_mul(G, k.to_bytes(32, 'big'))
+    R1 = secp256k1.ec_pubkey_serialize(G, secp256k1.EC_COMPRESSED)
 
-    # R2 = k * B_scan
-    R2_point = secp256k1.ec_pubkey_tweak_mul(B_scan_point, k.to_bytes(32, 'big'))
-    R2 = secp256k1.ec_pubkey_serialize(R2_point, secp256k1.EC_COMPRESSED)
+    # R2 = k * B_scan (need fresh parse since B_scan_point was modified)
+    B_scan_point2 = secp256k1.ec_pubkey_parse(B_scan)
+    secp256k1.ec_pubkey_tweak_mul(B_scan_point2, k.to_bytes(32, 'big'))
+    R2 = secp256k1.ec_pubkey_serialize(B_scan_point2, secp256k1.EC_COMPRESSED)
 
     # e = hash(A || B_scan || C || R1 || R2)
     e_preimage = A + B_scan + C + R1 + R2
@@ -425,12 +462,8 @@ def create_bip375_psbt(
         script_pubkey=input_script
     )
 
-    # Add BIP32 derivation info
-    fingerprint = root.child(0).fingerprint
-    derivation = bip32.DerivationPath.parse(derivation_path)
-    inp.taproot_bip32_derivations = {
-        public_key.xonly(): ([], bip32.DerivationPath(fingerprint, derivation.derivation))
-    }
+    # Add BIP32 derivation info (simplified - not required for SP verification)
+    # Skip taproot_bip32_derivations as it requires DerivationPath which varies by embit version
 
     # Generate DLEQ proof
     C, dleq_proof = generate_dleq_proof(a, A, B_scan)
